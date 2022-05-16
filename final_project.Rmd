@@ -26,6 +26,41 @@ For my time series analysis, I propose to investigate how the U.S.’s internati
 
 My datasets include data on international investments from the US Bureau of Economic Analysis, US GDP, an aggregate of all US debt, and international airline travel. I hope that the first three datasets give a good picture of how capital flows from the US changed over the pandemic, as well as some supporting financial information that might hint at drivers. I hope the fourth dataset on international airline travel can serve as a proxy for how international commerce shut down during the first part of 2020. 
 
+## Data Sources
+### U.S. Net International Investment Position
+
+Source: https://fred.stlouisfed.org/series/IIPUSNETIQ
+Time span: 2006 - 2021
+Frequency: Quarterly
+Geographic areas/entities: This is a national-level aggregate of all US assets and liabilities. 
+Who collected the data: U.S. Bureau of Economic Analysis 
+Description: This dataset represents the difference between US residents assets and liabilities in a given time period. The time series might change due to a reevaluation of assets or buying/selling assets. 
+
+### US GDP
+Source: https://fred.stlouisfed.org/series/GDP
+Time span: 1947 - 2021
+Frequency: Quarterly
+Geographic areas/entities: This is an aggregate of US economic activity. 
+Who collected the data: U.S. Bureau of Economic Analysis
+Description: According to the source, “Gross domestic product (GDP), the featured measure of U.S. output, is the market value of the goods and services produced by labor and property located in the United States.”
+
+### US Debt
+
+Source: https://fred.stlouisfed.org/series/GFDEBTN
+Time span: 1966-2021
+Frequency: Quarterly
+Geographic areas/entities: This is an aggregate of all US public debt. 
+Who collected the data: U.S. Treasury
+Description: This is all US public debt for a given period. 
+
+### International air travel 
+Source: https://data.transportation.gov/Aviation/International_Report_Freight/u4sg-r5vg
+Time span: 1990 - 2022
+Frequency: Monthly
+Geographic areas/entities: The dataset is at the level of individual commercial flights either heading to or leaving from the United States. 
+Who collected the data: U.S. Department of Transportation
+Description: According to the source, this data represents “All nonstop commercial air freight traffic traveling between international points and U.S. airports.”
+
 ## Exploratory Analysis
 ### U.S. GDP
 
@@ -36,6 +71,7 @@ dt <- fread("raw_data/GDP.csv")
 ```
 
 There are `r nrow(dt[is.na(GDP)])` NA observations in the series. 
+
 ** Plotting and Analysis **
 ```{r plot1}
 gdp <- ts(dt$GDP, start = c(1947, 1), frequency = 4)
@@ -95,10 +131,10 @@ I think to start I'll run two models. Model 1 will be a MA-2, AR-2 model. There 
 ar2_ma2 = sarima(gdp_log, p = 2, d = 1, q = 2)
 ```
 
-The plot of the standardized residuals looks good. There is not a clear trend here, even though there is a spike near 2020. THe ACF of residuals also looks good, where most of the points are inside the confidence interval. The Ljung-Box plot does not look very good though - many of the points are below the confidence interval. 
+The plot of the standardized residuals looks good. There is not a clear trend here, even though there is a spike near 2020. The ACF of residuals also looks good, where most of the points are inside the confidence interval. The Ljung-Box plot does not look very good though - many of the points are below the confidence interval. 
 
 ```{r modeling1b}
-ar2_ma5 = sarima(gdp_log, p = 2, d = 1, q = 3)
+ar2_ma5 = sarima(gdp_log, p = 2, d = 1, q = 5)
 ```
 The residuals look very similar between this model and the other. The Ljung-Box looks better though, especially at the beginning of the time series. The key question with this model is, are all five of the MA terms significant? 
 
@@ -239,7 +275,7 @@ This is very interesting - there are four pronounced lags for both the ACF and P
 
 ** ARIMA Modeling ** 
 ```{r modeling3a}
-ar4_ma4 = sarima(debt_log, p = 4, d = 2, q = 2)
+ar4_ma4 = sarima(debt_log, p = 4, d = 1, q = 4)
 ```
 
 This looks very similar to the model performance for US GDP. There is no evidence of a trend in the residuals plots, although there is a spike in 2020. This spike also appears in the far right of the normal-QQ plot. The Ljung-Box plot, though, shows several points within the confidence interval, which is not a great indicator for this model. 
@@ -265,13 +301,14 @@ kable(head(data))
 ```
 
 ** Plotting and analysis ** 
+
 There are `r nrow(data[is.na(flights)])` NA observations in the time series. Next I want to turn the data into a time series and do some exploratory data analysis. 
 ```{r time_series_eda}
 flights <- ts(data$flights, start = c(1990, 1), frequency = 12)
 plot(flights, ylab = 'International air freight')
 ```
 
-This is an interesting series - it's definitely non-stationary, but not in a constant way. There is a period of time where international freight traffic really fell from 2002 through 2014. 
+This is an interesting series - it's definitely non-stationary, but not in a constant way. There is a period of time where international freight traffic really fell from 2002 through 2014, likely due to the dampening of airport travel and increased security after 9/11. 
 
 ** Evaluate stationarity with a hypothesis test ** 
 ```{r hypothesis_test2}
@@ -289,7 +326,8 @@ kpss.test(flights_diff)
 
 ** Investigate seasonality ** 
 ```{r seasonality}
-flights_spec = mvspec(flights, spans = 2) # No need for detrend because there's not a strong trend
+flights_spec = mvspec(flights, spans = 2, detrend = TRUE) 
+# There is a slight trend on the right side of the plot
 ```
 Again, there is not strong evidence of seasonality in this time series. 
 
@@ -301,6 +339,7 @@ astsa::acf2(flights_diff)
 In the ACF, the first lag is significant, as well as some lags around the six month mark and 1 year. In the PACF, the first three lags are significant, as well as the lag at 1 year. The models I might try would be: 
 
 Model 1: Modeled seasonally using sarima, with the following terms:
+
 * MA-1
 * SMA-1 
 * AR-3
@@ -317,6 +356,8 @@ model1 = sarima(flights, S=12,
                 P = 1, D = 0, Q = 1)
 ```
 
+There does not seem to be a trend in the residual plots, so this model is explaining the variance in the data well. The normal-QQ plot looks very good. The Ljung-Box plot, however, doesn't look so good, especially on the left of the graph. Many of these points are on or below the confidence interval. 
+
 ```{r modeling4b}
 flights_fourier4 = arima(flights,
                      order = c(2, 1, 1), # p, d, q
@@ -330,9 +371,11 @@ flights_fourier6 = arima(flights,
                      xreg = fourier(flights, K = 6))
 flights_fourier6
 ```
+These models have very similar AIC scores, and the model with 4 terms actually has a slightly lower term. So in terms of simplicity and model performance the model with four Fourier terms is better. 
 
 ## Additional Analysis
-For additional analyses, I was hoping to do three things. 
+For additional analyses, I was hoping to do:
+
 1. Non-ARIMA modeling for the flights dataset
 2. Dynamic regression with the four datasets
 
