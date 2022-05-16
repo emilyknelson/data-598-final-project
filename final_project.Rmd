@@ -1,0 +1,342 @@
+---
+title: "Initial Project Report"
+author: "Emily Linebarger"
+date: "5/11/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Set working directory to the root of the repository to run all code. 
+
+library(fpp3)
+library(data.table)
+library(astsa)
+library(forecast)
+library(tseries)
+library(knitr)
+```
+
+# Initial Project Report 
+# Emily Linebarger 
+
+## Introduction
+For my time series analysis, I propose to investigate how the U.S.’s international investment position changed during the COVID-19 pandemic. The dataset I chose from the federal reserve should show whether the US took on more international debt during the pandemic, or if assets the US held grew in value relative to other countries’ holdings. My background is in economics and international development, so I am always interested in how world events change capital flows. 
+
+My datasets include data on international investments from the US Bureau of Economic Analysis, US GDP, an aggregate of all US debt, and international airline travel. I hope that the first three datasets give a good picture of how capital flows from the US changed over the pandemic, as well as some supporting financial information that might hint at drivers. I hope the fourth dataset on international airline travel can serve as a proxy for how international commerce shut down during the first part of 2020. 
+
+## Exploratory Analysis
+### U.S. GDP
+
+** Data Cleaning **
+```{r cleaning1}
+# This is the raw dataset downloaded from https://fred.stlouisfed.org/series/GDP on 5/11/2022.
+dt <- fread("raw_data/GDP.csv")
+```
+
+There are `r nrow(dt[is.na(GDP)])` NA observations in the series. 
+** Plotting and Analysis **
+```{r plot1}
+gdp <- ts(dt$GDP, start = c(1947, 1), frequency = 4)
+plot(gdp, ylab = "U.S. GDP")
+```
+This data is certainly not stationary! It's constantly increasing. However, there doesn't seem to be any strange values other than drops around 2008 and 2020, which were notable recessions. 
+
+** Evaluate stationarity with a hypothesis test **
+```{r hypothesis_test1}
+# Null hypothesis: data is stationary 
+# Alternative hypothesis: data is non-stationary
+kpss.test(gdp)
+
+# p-value is 0.01, so we reject our null hypothesis. Data is non-stationary. 
+gdp_diff <- diff(gdp, lag = 1)
+kpss.test(gdp_diff)
+
+# After one lag we still don't observe stationarity. Try 2 lags. 
+gdp_diff <- diff(gdp, lag = 2)
+kpss.test(gdp_diff)
+plot(gdp_diff, ylab = "U.S. GDP, differenced twice")
+```
+This is fascinating. Even after differencing the series twice we still fail the stationarity test. It seems to be caused by the major dip that happened in 2020. I might have to truncate the series to use it for modeling, but then this would go against the very goal of my project; to see how all of these time series changed around the COVID-19 pandemic. 
+
+Let me try to take a log of this time series before differencing it, and see if that helps with stationarity. 
+```{r log_ts1}
+gdp_log = log(gdp)
+kpss.test(gdp_log)
+
+# We reject the null hypothesis, so data is non-stationary without differencing. 
+gdp_log_diff = diff(gdp_log, lag = 1)
+kpss.test(gdp_log_diff)
+
+# 0.06294 < 0.05, so we fail to reject the null hypothesis. 
+# This differenced, logged series is stationary! 
+plot(gdp_log, ylab = "GDP with log applied")
+plot(gdp_log_diff, ylab = "GDP with log and differencing")
+```
+
+
+** Evaluate Seasonality ** 
+```{r seasonality1}
+gdp_log_spec = mvspec(gdp, spans = 2, detrend = TRUE)
+```
+
+Although it's already pretty clear from the plot of the data, there is no evidence of seasonality in this series. It's clear that the detrend argument is not completely working because there is a huge spike near the left axis. But other than that there is no evidence of seasonal variation. 
+
+** ACF/PACF **
+```{r acf1} 
+acf2(gdp_log_diff)
+```
+There are many significant spikes in the ACF! I might have to experiment with adding MA terms to make sure I've captured all of the variance here. 
+I think to start I'll run two models. Model 1 will be a MA-2, AR-2 model. There are two clear, significant lags on the ACF and PACF which makes me think this could be a good fit. Then, as a comparison, I'll run a MA-5, AR-2 model, to see if adding additional MA terms captures some of the variation in the right tail of the ACF. For both of these models, I'll run them on the logged-GDP data and include one difference term. 
+
+** ARIMA Modeling **
+```{r modeling1a}
+ar2_ma2 = sarima(gdp_log, p = 2, d = 1, q = 2)
+```
+
+The plot of the standardized residuals looks good. There is not a clear trend here, even though there is a spike near 2020. THe ACF of residuals also looks good, where most of the points are inside the confidence interval. The Ljung-Box plot does not look very good though - many of the points are below the confidence interval. 
+
+```{r modeling1b}
+ar2_ma5 = sarima(gdp_log, p = 2, d = 1, q = 3)
+```
+The residuals look very similar between this model and the other. The Ljung-Box looks better though, especially at the beginning of the time series. The key question with this model is, are all five of the MA terms significant? 
+
+```{r evaluate_model1b}
+ar2_ma5$fit
+```
+
+These NAs in the coefficients suggest that the model is overfit. So this is not a good choice for this data. 
+
+### U.S. Net International Investment Position
+
+** Data Cleaning ** 
+```{r cleaning3}
+# Data downloaded from this site on 4/24/22: 
+# https://fred.stlouisfed.org/series/IIPUSNETIQ
+invest = fread("raw_data/IIPUSNETIQ.csv")
+```
+
+** Plotting and Analysis **
+```{r plotting3}
+# This is a quarterly series starting in Q1 2006. 
+invest = ts(invest$IIPUSNETIQ, frequency = 4, start = c(2006, 1))
+plot(invest, ylab = "US Net International Investment Position")
+```
+
+The dataset has a strong downwards trend, so it's non-stationary. However, there doesn't appear to be any seasonality from a visual inspection. 
+
+** Evaluate stationarity with a hypothesis test ** 
+```{r hypothesis_test3}
+# Check the stationarity of the series with a KPSS test. 
+kpss.test(invest)
+
+# We have a p-value of 0.01, so we fail to reject the null hypothesis. 
+# This dataset is non-stationary, so we difference it. 
+invest_diff <- diff(invest, differences = 1)
+
+# Evaluate KPSS test again
+kpss.test(invest_diff)
+# With a p-value of 0.022, this data is still non-stationary. 
+
+# Try a difference of 2. 
+invest_diff <- diff(invest, differences = 2)
+kpss.test(invest_diff)
+
+# Finally, with a p-value of 0.1, we reject the null hypothesis. 
+# This differenced dataset is stationary. 
+plot(invest_diff, ylab = "Differenced US net int. investment position")
+```
+** Evaluate Seasonality **
+```{r seasonality2}
+invest_spec = mvspec(invest, detrend = TRUE, spans = 3)
+```
+Again, the function is having some trouble detrending this curve, and there is no obvious seasonality. 
+
+** ACF/PACF **
+
+```{r evaluating_acf3}
+# Run ACF/PACF on differenced series. 
+astsa::acf2(invest_diff)
+```
+
+I see two significant lags in the PACF, which tells me that an autoregressive model might be better. I'll model an autoregressive model with 2 lags. I'll also model a MA-1 model for comparison, because there was one significant lag in the ACF. 
+
+** ARIMA Modeling ** 
+```{r ar2}
+# Model the original series, and include the difference term in the model
+ar2 <- astsa::sarima(invest, p = 2, d = 2, q = 0)
+```
+
+I see mostly white noise in the residuals, based on the residual plot and the residual ACF. The QQ plot indicates normality as well, because most of the plots are on the line. But for the Ljung-Box plot, many of the points are on or within the confidence interval. 
+
+```{r ma1}
+# Model the original series, and include the difference term in the model
+ma1 <- astsa::sarima(invest, p = 0, d = 2, q = 1)
+```
+
+For the MA-1 model, the residuals plots and QQ plot look very similar, but the Ljung-Box plot is markedly improved. Many of the points are now above the confidence interval. For this reason alone, I would probably choose the MA-1 model for this data. 
+
+One last thing I wanted to consider was the AICc. The AICc for this model is `r ar2$AICc`, and the AICc for the MA-1 is `r ma1$AICc`. These are practically identical, so they're not a good criterion for choosing a model here. 
+
+### U.S. Debt
+
+** Data Cleaning **
+```{r cleaning4}
+# Data was downloaded from https://fred.stlouisfed.org/series/GFDEBTN on 5/11/2022
+dt <- fread("raw_data/GFDEBTN.csv")
+```
+
+There are `r nrow(dt[is.na(GFDEBTN)])` NA observations in the data.
+
+** Plotting and Analysis **
+```{r plot3}
+debt <- ts(dt$GFDEBTN, start = c(1966, 1), frequency = 4)
+plot(debt, ylab = "U.S. Debt")
+```
+This is another highly non-stationary series. There is also a notable spike in debt during the COVID-19 pandemic, right around the start of 2020. 
+
+** Evaluate stationarity with a hypothesis test**
+```{r hypothesis_test4}
+# Null hypothesis: data is stationary 
+# Alternative hypothesis: data is non-stationary
+kpss.test(debt)
+
+# p-value is 0.01, so we fail to reject the null hypothesis. Data is non-stationary. 
+debt_diff <- diff(debt, lag = 1)
+kpss.test(debt_diff)
+
+# After one lag, p-value is still 0.01. Data is still non-stationary, so try 2 lags. 
+debt_diff <- diff(debt, lag = 2)
+kpss.test(debt_diff)
+
+plot(debt_diff, ylab = "U.S. Debt, differenced twice")
+```
+This has a very similar problem to the US GDP series. There is very abnormal behavior around the COVID-19 pandemic. 
+I'll try a similar approach of taking a log before differencing. 
+
+```{r diff2}
+debt_log = log(debt)
+kpss.test(debt_log)
+# p-value is 0.01 < 0.05, so we reject the null hypothesis. The data is non-stationary. 
+
+debt_log_diff <- diff(debt_log, lag = 1)
+kpss.test(debt_log_diff)
+# p-value is 0.1, so we fail to reject the null. The data is stationary after being logged and differenced one time. 
+
+```
+** Evaluate Seasonality **
+```{r seasonality3}
+debt_spec = mvspec(debt, spans = 2, detrend = TRUE)
+```
+Again, there is no evidence of seasonality in this series, just a strong trend. 
+
+** ACF/PACF **
+```{r acf3}
+acf2(debt_log_diff)
+```
+This is very interesting - there are four pronounced lags for both the ACF and PACF. So I'll try a AR-4, MA-4 model with 1 difference term.
+
+** ARIMA Modeling ** 
+```{r modeling3a}
+ar4_ma4 = sarima(debt_log, p = 4, d = 2, q = 2)
+```
+
+This looks very similar to the model performance for US GDP. There is no evidence of a trend in the residuals plots, although there is a spike in 2020. This spike also appears in the far right of the normal-QQ plot. The Ljung-Box plot, though, shows several points within the confidence interval, which is not a great indicator for this model. 
+
+### International airline freight to the United States 
+
+This data represents all nonstop commercial airline freight traffic traveling to the United States. It is maintained by the Department of Transportation, and has monthly data from January 1990 - September 2021. 
+
+** Data Cleaning **
+```{r cleaning}
+# This is the raw dataset downloaded from https://data.transportation.gov/Aviation/International_Report_Freight/u4sg-r5vg on 5/1/2022. 
+data <- fread("raw_data/International_Report_Freight.csv")
+
+# I only care about the total number of flights flown for a given year and month. 
+# So I want to collapse out the airline and type columns. 
+data <- data[, .(flights = sum(Total, na.rm = F)), by = 'data_dte']
+setnames(data, 'data_dte', 'date')
+data[, date:=as.Date(data$date, format = "%m/%d/%Y")]
+
+# Here's what the collapsed data looks like. 
+kable(head(data))
+
+```
+
+** Plotting and analysis ** 
+There are `r nrow(data[is.na(flights)])` NA observations in the time series. Next I want to turn the data into a time series and do some exploratory data analysis. 
+```{r time_series_eda}
+flights <- ts(data$flights, start = c(1990, 1), frequency = 12)
+plot(flights, ylab = 'International air freight')
+```
+
+This is an interesting series - it's definitely non-stationary, but not in a constant way. There is a period of time where international freight traffic really fell from 2002 through 2014. 
+
+** Evaluate stationarity with a hypothesis test ** 
+```{r hypothesis_test2}
+# Null hypothesis: data is stationary 
+# Alternative hypothesis: data is non-stationary
+kpss.test(flights)
+
+# p-value is 0.01, so we reject the null hypothesis. Data is non-stationary, so we need to difference the series. 
+flights_diff = diff(flights, lag = 1)
+kpss.test(flights_diff)
+
+# After 1 lag we get a p-value of 0.1, so we fail to reject the null hypothesis. 
+# Data is stationary. 
+```
+
+** Investigate seasonality ** 
+```{r seasonality}
+flights_spec = mvspec(flights, spans = 2) # No need for detrend because there's not a strong trend
+```
+Again, there is not strong evidence of seasonality in this time series. 
+
+** ACF/PACF **
+```{r acf-pacf}
+astsa::acf2(flights_diff)
+```
+
+In the ACF, the first lag is significant, as well as some lags around the six month mark and 1 year. In the PACF, the first three lags are significant, as well as the lag at 1 year. The models I might try would be: 
+
+Model 1: Modeled seasonally using sarima, with the following terms:
+* MA-1
+* SMA-1 
+* AR-3
+* SAR-1 
+
+Model 2: Fourier seasonality with K = 4, AR = 2, MA = 1
+
+Model 3: Fourier seasonality with K = 6, AR = 2, MA = 1
+
+** ARIMA Modeling ** 
+```{r modeling4a, eval = F}
+model1 = sarima(flights, S=12,
+                p = 3, d = 1, q = 1, 
+                P = 1, D = 0, Q = 1)
+```
+
+```{r modeling4b}
+flights_fourier4 = arima(flights,
+                     order = c(2, 1, 1), # p, d, q
+                     xreg = fourier(flights, K = 4))
+flights_fourier4
+```
+
+```{r modeling4c}
+flights_fourier6 = arima(flights,
+                     order = c(2, 1, 1), # p, d, q
+                     xreg = fourier(flights, K = 6))
+flights_fourier6
+```
+
+## Additional Analysis
+For additional analyses, I was hoping to do three things. 
+1. Non-ARIMA modeling for the flights dataset
+2. Dynamic regression with the four datasets
+
+I have been able to include #1 in the flights section above, and plan to include #2 in my final report.
+
+## Summary and Implications
+What this project has shown me is that additional transformations may be needed to work with highly non-stationary series. I've also found that auto.arima() is a really useful tool for checking for "blind spots" in your model, like looking for seasonality where you weren't anticipating it. I don't have too many findings about the time series themselves without doing the dynamic regression, but I'm looking forward to running this analysis. 
